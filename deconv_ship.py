@@ -5,6 +5,7 @@ import torch.optim as optim
 from tqdm import tqdm
 from cnn_model import get_trained_cnn
 from utils import get_datasets
+import argparse
 
 class DeconvNet(nn.Module):
     def __init__(self, cnn):
@@ -33,6 +34,10 @@ class DeconvNet(nn.Module):
     def forward(self, x, pool_info):
         indices3 = pool_info['pool3']['indices']
         size3 = pool_info['pool3']['output_size']
+        size3 = size3[1:]
+        print("Size3:", size3)
+        print("Indices3:", indices3.size())
+        print("x size:", x.size())
         x = self.unpool3(x, indices3, output_size=size3)
         x = self.relu3(x)
         x = self.deconv3(x)
@@ -40,6 +45,7 @@ class DeconvNet(nn.Module):
         # Unpool the second pooling operation
         indices2 = pool_info['pool2']['indices']
         size2 = pool_info['pool2']['output_size']
+        size2 = size2[1:]
         x = self.unpool2(x, indices2, output_size=size2)
         x = self.relu2(x)
         x = self.deconv2(x)
@@ -47,12 +53,23 @@ class DeconvNet(nn.Module):
         # Unpool the first pooling operation
         indices1 = pool_info['pool1']['indices']
         size1 = pool_info['pool1']['output_size']
+        size1 = size1[1:]
         x = self.unpool1(x, indices1, output_size=size1)
         x = self.relu1(x)
         x = self.deconv1(x)
         return x
 
 def train_deconvnet(cnn, deconvnet, dataloader, num_epochs=10, lr=1e-3, device='cpu'):
+    """
+        @brief: train the deconvnet associated with the given cnn
+        @params:
+            cnn: trained cnn
+            deconvnet: untrained deconvent
+            dataloader: dataloader containing data on which the training will be done
+            num_epoch: number of epochs
+            lr: learning rate
+            device: cpu or cuda
+    """
     cnn.eval()  # CNN is fixed
     deconvnet.train()
     optimizer = optim.Adam(deconvnet.parameters(), lr=lr)
@@ -92,6 +109,7 @@ def train_deconvnet(cnn, deconvnet, dataloader, num_epochs=10, lr=1e-3, device='
             optimizer.step()
             total_loss += loss.item()
         print(f"Epoch {epoch+1}/{num_epochs}, Loss: {total_loss/len(dataloader):.4f}")
+    return deconvnet
 
 def visualize_activation(cnn, deconvnet, input_image, layer='conv2', filter_index=0):
     """
@@ -132,6 +150,7 @@ def visualize_activation(cnn, deconvnet, input_image, layer='conv2', filter_inde
         x = cnn.relu3(x)
         # x now has shape [batch, 16, H, W]
     
+    x = x.unsqueeze(1)
     # Select the filter of interest.
     feature_map = x[0, filter_index, :, :]  # take the first image in the batch
     # Find the position of maximum activation
@@ -158,13 +177,14 @@ def visualize_activation(cnn, deconvnet, input_image, layer='conv2', filter_inde
     
     # Now, use the deconvnet to reconstruct the image.
     # Pass the masked feature map along with stored pool information.
-    reconstruction = deconvnet(x_pooled, cnn.pool_info)
+    reconstruction = deconvnet(x_pooled.squeeze(1), cnn.pool_info)
     
     # Normalize the reconstruction for visualization.
     rec = reconstruction.detach().cpu().squeeze()
     rec = rec - rec.min()
     if rec.max() > 0:
         rec = rec / rec.max()
+    rec =rec.view(1, -1)
     
     # Display the result.
     plt.figure(figsize=(3, 3))
@@ -173,11 +193,33 @@ def visualize_activation(cnn, deconvnet, input_image, layer='conv2', filter_inde
     plt.axis('off')
     plt.show()
 
-    if __name__ == "__main__":
-        model = get_trained_cnn()
-        dataset, _, _ = get_datasets()
-        inp = dataset[0]
-        print(model)
-        print(inp[0].shape)
-        # currently doesn't work because of a shape problem
-        print(model(inp[0]))
+def get_trained_deconvnet(model, path):
+    model.load_state_dict(torch.load(path, weights_only=True))
+    model.eval()
+    return model
+
+if __name__ == "__main__":
+
+    print("Starting!")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train", action=argparse.BooleanOptionalAction)
+    args = parser.parse_args()
+    model = get_trained_cnn()
+    deconvnet = DeconvNet(model)
+    dataset, _, _ = get_datasets()
+    print(args.train)
+    if args.train:
+        print("Training will start now !")
+        dataloader = torch.utils.data.DataLoader(dataset)
+        deconvnet = train_deconvnet(model, deconvnet, dataloader)
+        torch.save(deconvnet.state_dict(), "deconvnet_model.pth")
+    else:
+        deconvnet =  get_trained_deconvnet(deconvnet, "deconvnet_model.pth")
+    inp = dataset[0]
+    print(model)
+    print(inp[0].shape)
+    # FIXED: currently doesn't work because of a shape problem
+    print(model(inp[0]))
+    input_image = inp[0]
+    # better to exexute with ipython
+    visualize_activation(model, deconvnet, input_image, 'conv2', 0)
