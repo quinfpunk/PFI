@@ -4,6 +4,7 @@ import numpy as np
 from cnn_model import get_trained_cnn
 from utils import get_datasets
 
+
 class ReducedCNN(nn.Module):
     def __init__(self, original_model, target_class, img_height=128, img_width = 128):
         super(ReducedCNN, self).__init__()
