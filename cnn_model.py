@@ -30,7 +30,6 @@ class ShipClassificationCNN(nn.Module):
         self.relu3 = nn.ReLU()
         self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.flatten = nn.Flatten()
         self.fc1 = nn.Linear(128 * (self.img_height // 8) * (self.img_width // 8), 128)
         self.relu_fc = nn.ReLU()
         self.fc2 = nn.Linear(128, self.num_classes)
@@ -48,7 +47,7 @@ class ShipClassificationCNN(nn.Module):
         x = self.relu3(x)
         x = self.pool3(x)
 
-        x = self.flatten(x)
+        x = x.view(x.size(0), -1)
         x = self.fc1(x)
         x = self.relu_fc(x)
         x = self.fc2(x)
