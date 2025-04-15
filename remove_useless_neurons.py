@@ -194,7 +194,7 @@ class PrunedCNN(nn.Module):
         return self.sigmoid(x)
 
 if __name__ == "__main__":
-    target_class = 5
+    target_class = 0
     num_images_for_pruning = 20
     pruning_batch_size = 16
     absolute_thresholds = (0.05, 0.05, 0.05)
@@ -207,7 +207,7 @@ if __name__ == "__main__":
     dataset, _, _ = get_datasets()
     sample_image = dataset[dataset_example_number][0].unsqueeze(0).to(device)
     print("Target class: " + str(target_class))
-    print("Dataset image example class : " + str(dataset[dataset_example_number][1]))
+    print(f"Dataset image example class : {dataset[dataset_example_number][1] + 1}")
     
 
     active_n1, active_n2, active_n3 = get_aggregated_active_neurons(original_model, dataset, target_class, num_images_for_pruning, batch_size = pruning_batch_size, device= device)
@@ -219,10 +219,13 @@ if __name__ == "__main__":
     print("Pruned model created")
     print(pruned_model)
 
+    torch.save(pruned_model.state_dict(), f"pruned_model_{target_class +1}.pth")
+    print("Pruned model saved")
+
     output = pruned_model(sample_image)
     print("Example output:", output)
 
-    """ 
+    """
     def evaluate_class_performance(model, dataset, is_pruned):
         model.eval()
         class_correct = {i: 0 for i in range(10)}
@@ -258,8 +261,9 @@ if __name__ == "__main__":
 
     first_accuracies, first_mean_accuracy = evaluate_class_performance(original_model, dataset, False)
     pruned_accuracies, pruned_mean_accuracy = evaluate_class_performance(pruned_model, dataset, True) 
+    
     """
-
+    """"""
     def create_multiclass_batch(dataset, num_classes, samples_per_class, device):
         indices_by_class = defaultdict(list)
 
@@ -331,8 +335,8 @@ if __name__ == "__main__":
     sample_image_batch, sample_labels_batch = create_multiclass_batch(dataset, num_classes = 10, samples_per_class = 1, device = device)
     print(f"Sample batch created with shape: {sample_image_batch.shape}")
 
-
-#Define the saliency map calculation
+    """
+    #Define the saliency map calculation
     def compute_saliency_map(model, image_batch_in):
         model.eval()
         #print(f"Image shape: {image.shape}")
@@ -405,7 +409,9 @@ if __name__ == "__main__":
 
     plt.show()
 
-    
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
     from torch.autograd import Function
     import torch.nn.functional as F
     import cv2
@@ -448,6 +454,10 @@ if __name__ == "__main__":
             output = self.model(input_image_batch)
             #print(f"Output shape: {output.shape}, Output values: {output}")
             
+            if output.ndim == 1:
+                output = output.unsqueeze(1)
+            
+
             if output.shape[1] > 1: #Original model
                 if target_class_index is None:
                     target_class_index = output.argmax(dim=1) #Shape [batch_size]
@@ -485,13 +495,18 @@ if __name__ == "__main__":
 
             heatmap = torch.mean(activations, dim=1)
             heatmap = F.relu(heatmap)
-            
-            max_val = torch.amax(heatmap, dim=(1,2), keepdim=True)
-            min_val = torch.amin(heatmap, dim=(1,2), keepdim=True)
-            heatmap = (heatmap - min_val) / (max_val - min_val + 1e-10)
+
+            batch_size = heatmap.shape[0]
+            normalized_heatmap = torch.zeros_like(heatmap)
+            for i in range(batch_size):
+                img_heatmap = heatmap[i]
+                max_val = torch.amax(img_heatmap)
+                min_val = torch.amin(img_heatmap)
+                normalized_heatmap[i] = (img_heatmap - min_val) / (max_val - min_val + 1e-10)
+
             self._remove_hooks()
 
-            return heatmap[0].cpu()
+            return normalized_heatmap
 
         def overlay_heatmap(self, image, heatmap, alpha=0.5):
             #The gradCAM does not keep the original size, so I will upscale it
@@ -504,7 +519,8 @@ if __name__ == "__main__":
 
             #Convert to RGB
             new_heatmap = np.uint8(255 * new_heatmap.cpu().detach().numpy())
-            new_heatmap = cv2.applyColorMap(new_heatmap, cv2.COLORMAP_JET)
+            new_heatmap = cv2.applyColorMap(new_heatmap, cv2.COLORMAP_TURBO)
+            new_heatmap = cv2.cvtColor(new_heatmap, cv2.COLOR_BGR2RGB)  # Convert from BGR to RGB
             new_heatmap = np.float32(new_heatmap) / 255
 
             # And now we convert the original image to numpy as well
@@ -515,6 +531,7 @@ if __name__ == "__main__":
             return superimposed_image
 
         
+    @staticmethod
     def compute_and__display_gradcam(model, image_tensor_batch, target_layer, target_class=None, is_pruned=False, alpha = 0.5):
         try:
             if len(image_tensor_batch.shape) == 3:
@@ -523,39 +540,45 @@ if __name__ == "__main__":
                 pass
             else:
                 raise ValueError("Unexpected image dimensions")
+            
+            batch_size = image_tensor_batch.shape[0]
         
             grad_cam = GradCAM(model, target_layer)
             actual_target_idx = target_class if not is_pruned else None
-            heatmap = grad_cam.generate_cam(image_tensor_batch, actual_target_idx)
-            original_img = image_tensor_batch[0].cpu()
-            superimposed_image = grad_cam.overlay_heatmap(original_img, heatmap, alpha=alpha)
+            heatmap = grad_cam.generate_cam(image_tensor_batch, actual_target_idx) #heatmap is actually a batch of heatmaps
+            
+            for i in range(batch_size):
+            
+                original_img = image_tensor_batch[i].cpu()
+                heatmap_tensor = heatmap[i] # Get the heatmap for the current image
+                superimposed_image = grad_cam.overlay_heatmap(original_img, heatmap_tensor, alpha=alpha)
 
-            fig, axes = plt.subplots(1, 3, figsize=(15,5))
+                fig, axes = plt.subplots(1, 3, figsize=(15,5))
 
-            img_display = original_img.permute(1, 2, 0).cpu().detach().numpy()
-            if img_display.min() < -0.1 or img_display.max() > 1.1:
-                if img_display.max() > 100: img_display=img_display/255.0
-                elif img_display.min() < -0.1: img_display = (img_display + 1.0) / 2.0
-        
-        
-            axes[0].imshow(np.clip(img_display, 0, 1))
-            axes[0].set_title('Original image')
-            axes[0].axis('off')
+                img_display = original_img.permute(1, 2, 0).cpu().detach().numpy()
+                if img_display.min() < -0.1 or img_display.max() > 1.1:
+                    if img_display.max() > 100: img_display=img_display/255.0
+                    elif img_display.min() < -0.1: img_display = (img_display + 1.0) / 2.0
+            
+            
+                axes[0].imshow(np.clip(img_display, 0, 1))
+                axes[0].set_title('Original image')
+                axes[0].axis('off')
 
-            axes[1].imshow(heatmap.numpy(), cmap='hot')
-            axes[1].set_title('Grad-CAM Heatmap only')
-            axes[1].axis('off')
+                axes[1].imshow(heatmap_tensor.numpy(), cmap='turbo')
+                axes[1].set_title('Grad-CAM Heatmap only')
+                axes[1].axis('off')
 
-            axes[2].imshow(superimposed_image, cmap='hot')
-            axes[2].set_title('Grad-CAM Overlay')
-            axes[2].axis('off')
+                axes[2].imshow(superimposed_image, cmap='turbo')
+                axes[2].set_title('Grad-CAM Overlay')
+                axes[2].axis('off')
 
-            if is_pruned:
-                plt.suptitle('Pruned model')
-            else:
-                plt.suptitle('Original model')
+                if is_pruned:
+                    plt.suptitle('Pruned model')
+                else:
+                    plt.suptitle('Original model')
 
-            plt.show()
+                plt.show()
 
         except Exception as e:
             model_type = "Pruned" if is_pruned else "Original"
@@ -579,3 +602,58 @@ if __name__ == "__main__":
 
     print("Evaluating GradCAM for Pruned Model")
     compute_and__display_gradcam(pruned_model, sample_image_batch, target_layer, is_pruned=True)
+
+
+"""
+    #Capture activations for the pruned model
+    captured_activations = {}
+    def get_activation_hook(layer_name):
+        def hook(model, input, output):
+            captured_activations[layer_name] = output.detach().cpu()
+        return hook
+    
+    def get_activations(model, target_layer, dataloader, device):
+        model.eval()
+        model.to(device)
+        layer_outputs = []
+        handle = None
+        layer_name= 'target_layer_activations'
+
+        try:
+            handle = target_layer.register_forward_hook(get_activation_hook(layer_name))
+            for inputs, _ in tqdm(dataloader, desc="Capturing activations"):
+                inputs = inputs.to(device)
+                _ = model(inputs) # Forward pass to capture activations
+
+                #Check if hook captured something
+                if layer_name in captured_activations:
+                    layer_outputs.append(captured_activations[layer_name].clone())
+                    del captured_activations[layer_name] 
+                else:
+                    print(f"Layer {layer_name} did not capture any activations.")
+
+        except Exception as e:
+            print(f"Error in capturing activations: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+        finally:
+            #REMOVE THE HOOOOK"
+            if handle:
+                handle.remove()
+            captured_activations.clear()
+
+        if not layer_outputs:
+            print("No activations captured.")
+            return None
+        
+
+        #Concatenate activations from all batches
+        try:
+            all_activations = torch.cat(layer_outputs, dim=0)
+            print(f"Successfully captured activations shape: {all_activations.shape}")
+            return all_activations
+        except Exception as e:
+            print(f"Error concatenating activations: {e}")
+            return None
+    """
