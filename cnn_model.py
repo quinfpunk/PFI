@@ -11,7 +11,7 @@ class ShipClassificationCNN(nn.Module):
             num_classes (int): Number of classes in the dataset
             num_layers (int): Number of layers
     """
-    def __init__(self, img_height=128, img_width=128, num_classes=6, num_layers=6):
+    def __init__(self, img_height=128, img_width=128, num_classes=10, num_layers=10):
         super(ShipClassificationCNN, self).__init__()
         self.img_height = img_height
         self.img_width = img_width
@@ -30,7 +30,6 @@ class ShipClassificationCNN(nn.Module):
         self.relu3 = nn.ReLU()
         self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.flatten = nn.Flatten()
         self.fc1 = nn.Linear(128 * (self.img_height // 8) * (self.img_width // 8), 128)
         self.relu_fc = nn.ReLU()
         self.fc2 = nn.Linear(128, self.num_classes)
@@ -48,7 +47,7 @@ class ShipClassificationCNN(nn.Module):
         x = self.relu3(x)
         x = self.pool3(x)
 
-        x = self.flatten(x)
+        x = x.view(x.size(0), -1)
         x = self.fc1(x)
         x = self.relu_fc(x)
         x = self.fc2(x)
@@ -60,5 +59,5 @@ def get_trained_cnn(cnn_path = "best_ship_cnn_model.pth"):
         Returns a trained CNN model.
     """
     model = ShipClassificationCNN()
-    model.load_state_dict(torch.load(cnn_path))
+    model.load_state_dict(torch.load(cnn_path, map_location=torch.device('cpu')))
     return model
